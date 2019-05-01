@@ -3,41 +3,29 @@ export default class Observable {
     const proxyHandler = {
       get: (target, key) => {
         if (/^\$/.test(key.toString())) {
-          const value = Reflect.get(this, key);
-          return typeof value === 'function' ? value.bind(this) : value;
+          return Reflect.get(this, key);
         } else {
           return Reflect.get(target, key);
         }
       },
-      set: (target, key, value) => {
-        if (!(Array.isArray(target) && key === 'length')) {
-          this.publish();
-        }
+      set: (target, key, nextValue) => {
         const hasKey = Reflect.has(target, key);
         const prevValue = hasKey && Reflect.get(target, key);
-        const isPrevObservable = prevValue && prevValue.$isObservable;
-        const isNextObservable = value && value.$isObservable;
-        if (!hasKey && isNextObservable) {
-          // Add observer to observable child
-          const observer = () => {
-            this.publish();
-          };
-          value.$subscribe(observer);
-          this.observers[key] = observer;
-        } else if (hasKey && isPrevObservable && !isNextObservable) {
-          // Remove observer from observable child
-          prevValue.$unsubscribe(this.observers[key]);
-          delete this.observers[key];
+        if (prevValue !== nextValue) {
+          if (prevValue && prevValue.$isObservable) {
+            prevValue.$unsubscribe(this.publish);
+          }
+          if (nextValue && nextValue.$isObservable) {
+            nextValue.$subscribe(this.publish);
+          }
+          this.publish();
         }
-        return Reflect.set(target, key, value);
+        return Reflect.set(target, key, nextValue);
       },
       deleteProperty: (target, key) => {
         const prevValue = Reflect.get(target, key);
-        const isPrevObservable = prevValue && prevValue.$isObservable;
-        if (isPrevObservable) {
-          // Remove observer from observable child
-          prevValue.$unsubscribe(this.observers[key]);
-          delete this.observers[key];
+        if (prevValue && prevValue.$isObservable) {
+          prevValue.$unsubscribe(this.publish);
         }
         this.publish();
         return Reflect.deleteProperty(target, key);
@@ -48,9 +36,10 @@ export default class Observable {
     this.originObject = originalObject;
     // Subscribers for this observable object
     this.subscribers = [];
-    // Observers for observable children update
-    this.observers = {};
 
+    this.$subscribe = this.$subscribe.bind(this);
+    this.$unsubscribe = this.$unsubscribe.bind(this);
+    this.publish = this.publish.bind(this);
     return this.proxyObject;
   }
 
@@ -69,10 +58,6 @@ export default class Observable {
     if (index >= 0) {
       this.subscribers.splice(index, 1);
     }
-  }
-
-  $toJSON() {
-    return JSON.stringify(this.originObject);
   }
 
   publish() {
